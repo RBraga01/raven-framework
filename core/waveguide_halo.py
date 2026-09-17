@@ -1,8 +1,8 @@
 """Wide additive halo approximation for Raven simulator HUD light leakage.
 
 This intentionally does not reuse Raven's calibrated PSF. It keeps a sharp HUD
-core and adds one or two broad, low-energy Gaussian halos in linear-light byte
-space before the existing background blend.
+core and adds one broad, low-energy Gaussian halo in linear-light byte space
+before the existing background blend.
 
 The halos are computed at reduced resolution and scaled back up. That is not a
 shortcut taken to save effort -- a wide halo is low-frequency by construction,
@@ -47,23 +47,17 @@ MIN_RADIUS_FOR_DOWNSCALE = 8
 
 @dataclass(frozen=True)
 class HaloSettings:
-    # Fitted to the Raven Prism reference footage: the falloff beside a
-    # card outline, measured out to 75 px and matched to within 1.5
-    # percentage points. test_the_default_settings_match_the_reference_falloff
-    # carries the sampled profile and checks these values against it.
+    # Fixed by Raven, not user-tunable: HALO_RADIUS / HALO_STRENGTH in
+    # config.json, matched against the Raven Prism reference footage.
     enabled: bool = False
-    primary_radius: int = 8
-    primary_strength: float = 0.10
-    secondary_radius: int = 40
-    secondary_strength: float = 0.05
+    radius: int = 20
+    strength: float = 0.05
 
     def sanitized(self) -> "HaloSettings":
         return replace(
             self,
-            primary_radius=max(1, min(int(self.primary_radius), 120)),
-            secondary_radius=max(1, min(int(self.secondary_radius), 180)),
-            primary_strength=max(0.0, min(float(self.primary_strength), 1.0)),
-            secondary_strength=max(0.0, min(float(self.secondary_strength), 1.0)),
+            radius=max(1, min(int(self.radius), 180)),
+            strength=max(0.0, min(float(self.strength), 1.0)),
         )
 
 
@@ -108,31 +102,25 @@ def apply_waveguide_halo(
     hud_linear_u8: np.ndarray,
     settings: HaloSettings,
 ) -> np.ndarray:
-    """Return sharp HUD + broad additive halos, preserving uint8 shape/dtype."""
+    """Return sharp HUD + one broad additive halo, preserving uint8 shape/dtype."""
     cfg = settings.sanitized()
-    if not cfg.enabled or (
-        cfg.primary_strength == 0.0 and cfg.secondary_strength == 0.0
-    ):
+    if not cfg.enabled or cfg.strength == 0.0:
         return hud_linear_u8.copy()
 
-    out = hud_linear_u8.astype(np.float32)
     source_peak = float(hud_linear_u8.max())
     if source_peak <= 0.0:
         return hud_linear_u8.copy()
 
-    for radius, strength in (
-        (cfg.primary_radius, cfg.primary_strength),
-        (cfg.secondary_radius, cfg.secondary_strength),
-    ):
-        if strength <= 0.0:
-            continue
-        layer = _blur(hud_linear_u8, radius)
-        layer_peak = float(layer.max())
-        if layer_peak <= 0.0:
-            continue
-        # Scale so the halo's own peak is `strength` of the source's, not
-        # `strength` of the energy the blur spread out. See the module
-        # docstring: without this the control cannot reach the look.
-        out += layer * (source_peak / layer_peak) * strength
+    layer = _blur(hud_linear_u8, cfg.radius)
+    layer_peak = float(layer.max())
+    if layer_peak <= 0.0:
+        return hud_linear_u8.copy()
 
+    # Scale so the halo's own peak is `strength` of the source's, not
+    # `strength` of the energy the blur spread out. See the module
+    # docstring: without this the control cannot reach the look.
+    out = (
+        hud_linear_u8.astype(np.float32)
+        + layer * (source_peak / layer_peak) * cfg.strength
+    )
     return np.clip(out, 0.0, 255.0).astype(np.uint8)
