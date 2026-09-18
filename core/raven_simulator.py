@@ -980,13 +980,7 @@ class SimulatorRunApp(QMainWindow):
             self._blend_sequence += 1
             self._last_put_time = time.perf_counter()
             self._blend_queue.put_nowait(
-                (
-                    app_bytes,
-                    w,
-                    h,
-                    seq,
-                    DEFAULT_OVERLAY_BRIGHTNESS,
-                )
+                (app_bytes, w, h, seq, DEFAULT_OVERLAY_BRIGHTNESS)
             )
             self._blend_last_sent = seq
         except queue.Full:
