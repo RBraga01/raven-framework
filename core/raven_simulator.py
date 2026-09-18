@@ -39,7 +39,7 @@ from ..helpers.animation_utils import fade_in, fade_out
 from ..helpers.logger import get_logger
 from ..helpers.utils import qpixmap_to_rgb_bytes
 from ..helpers.utils_light import load_config, set_custom_circle_cursor
-from .waveguide_halo import HaloSettings, apply_waveguide_halo
+from .waveguide_halo import apply_waveguide_halo
 
 log = get_logger("RunApp")
 _config = load_config()
@@ -87,6 +87,9 @@ _WEIGHT_R = CIE_R_Y / TOTAL_CIE_Y
 _WEIGHT_G = CIE_G_Y / TOTAL_CIE_Y
 _WEIGHT_B = CIE_B_Y / TOTAL_CIE_Y
 CONSIDER_POINT_SPREAD = False
+CONSIDER_WAVEGUIDE_HALO = _config["simulator"]["CONSIDER_WAVEGUIDE_HALO"]
+HALO_RADIUS = _config["simulator"]["HALO_RADIUS"]
+HALO_STRENGTH = _config["simulator"]["HALO_STRENGTH"]
 
 
 def _build_srgb_linear_luts():
@@ -155,7 +158,7 @@ _LUT_D_3D_LINEAR = _build_lut_d_3d_linear()
 _LUT_OUT_3D = _build_lut_out_3d()
 
 
-def blend_frame(bg_bgr, snapshot_bgr, halo_settings=None):
+def blend_frame(bg_bgr, snapshot_bgr):
     """Linear suppress blend: bg_bgr and snapshot_bgr (BGR uint8, same shape). Returns blended BGR uint8."""
     # -------------------------------------------------------------------------
     # FULL PIPELINE MATH
@@ -248,8 +251,8 @@ def blend_frame(bg_bgr, snapshot_bgr, halo_settings=None):
         si = cv2.filter2D(si, -1, POINT_SPREAD_KERNEL)
         use_linear_demand = True
 
-    if halo_settings is not None and halo_settings.enabled:
-        si = apply_waveguide_halo(si, halo_settings)
+    if CONSIDER_WAVEGUIDE_HALO:
+        si = apply_waveguide_halo(si, HALO_RADIUS, HALO_STRENGTH)
         use_linear_demand = True
 
     if use_linear_demand:
@@ -290,7 +293,7 @@ class SimulatorBlendWorker(QObject):
             if item is None:
                 break
             try:
-                app_bytes, w, h, seq, brightness, halo_settings = item
+                app_bytes, w, h, seq, brightness = item
                 snapshot_rgb = np.frombuffer(app_bytes, dtype=np.uint8).reshape(
                     (h, w, 3)
                 )
@@ -317,9 +320,7 @@ class SimulatorBlendWorker(QObject):
                 if USE_SIMPLE_ADDITIVE_BLEND:
                     blended = cv2.add(bg_bgr, snapshot_bgr)
                 else:
-                    blended = blend_frame(
-                        bg_bgr, snapshot_bgr, halo_settings=halo_settings
-                    )
+                    blended = blend_frame(bg_bgr, snapshot_bgr)
                 blended_rgb = np.ascontiguousarray(
                     cv2.cvtColor(blended, cv2.COLOR_BGR2RGB)
                 )
@@ -772,12 +773,6 @@ class SimulatorRunApp(QMainWindow):
             self._timing_report_timer.start(3000)
 
             self._raw_mode = False
-            # Fixed by Raven (config.json), not user-tunable: see waveguide_halo.py.
-            self._halo_settings = HaloSettings(
-                enabled=True,
-                radius=_config["simulator"]["HALO_RADIUS"],
-                strength=_config["simulator"]["HALO_STRENGTH"],
-            )
             self._app_ui_asleep = False
             self._raw_update_timer = QTimer(self)
             self._raw_update_timer.timeout.connect(self._update_raw_composite)
@@ -991,7 +986,6 @@ class SimulatorRunApp(QMainWindow):
                     h,
                     seq,
                     DEFAULT_OVERLAY_BRIGHTNESS,
-                    self._halo_settings,
                 )
             )
             self._blend_last_sent = seq

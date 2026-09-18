@@ -31,8 +31,6 @@ photograph.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-
 import cv2
 import numpy as np
 
@@ -43,22 +41,6 @@ DOWNSCALE = 4
 # Below this radius the downscale-and-blur round trip costs more than it
 # saves, and the halo is tight enough that resampling would show.
 MIN_RADIUS_FOR_DOWNSCALE = 8
-
-
-@dataclass(frozen=True)
-class HaloSettings:
-    # Fixed by Raven, not user-tunable: HALO_RADIUS / HALO_STRENGTH in
-    # config.json, matched against the Raven Prism reference footage.
-    enabled: bool = False
-    radius: int = 20
-    strength: float = 0.05
-
-    def sanitized(self) -> "HaloSettings":
-        return replace(
-            self,
-            radius=max(1, min(int(self.radius), 180)),
-            strength=max(0.0, min(float(self.strength), 1.0)),
-        )
 
 
 def _blur(linear_u8: np.ndarray, radius: int) -> np.ndarray:
@@ -100,27 +82,31 @@ def _blur(linear_u8: np.ndarray, radius: int) -> np.ndarray:
 
 def apply_waveguide_halo(
     hud_linear_u8: np.ndarray,
-    settings: HaloSettings,
+    radius: int,
+    strength: float,
 ) -> np.ndarray:
-    """Return sharp HUD + one broad additive halo, preserving uint8 shape/dtype."""
-    cfg = settings.sanitized()
-    if not cfg.enabled or cfg.strength == 0.0:
-        return hud_linear_u8.copy()
+    """Return sharp HUD + one broad additive halo, preserving uint8 shape/dtype.
+
+    ``radius``/``strength`` are the fixed HALO_RADIUS/HALO_STRENGTH from
+    config.json — this call is only reached when CONSIDER_WAVEGUIDE_HALO is
+    on, so there is nothing here to validate on the hot path.
+    """
+    if strength == 0.0:
+        return hud_linear_u8
 
     source_peak = float(hud_linear_u8.max())
     if source_peak <= 0.0:
-        return hud_linear_u8.copy()
+        return hud_linear_u8
 
-    layer = _blur(hud_linear_u8, cfg.radius)
+    layer = _blur(hud_linear_u8, radius)
     layer_peak = float(layer.max())
     if layer_peak <= 0.0:
-        return hud_linear_u8.copy()
+        return hud_linear_u8
 
     # Scale so the halo's own peak is `strength` of the source's, not
     # `strength` of the energy the blur spread out. See the module
     # docstring: without this the control cannot reach the look.
     out = (
-        hud_linear_u8.astype(np.float32)
-        + layer * (source_peak / layer_peak) * cfg.strength
+        hud_linear_u8.astype(np.float32) + layer * (source_peak / layer_peak) * strength
     )
     return np.clip(out, 0.0, 255.0).astype(np.uint8)
