@@ -1,32 +1,16 @@
 """Wide additive halo approximation for Raven simulator HUD light leakage.
 
-This intentionally does not reuse Raven's calibrated PSF. It keeps a sharp HUD
-core and adds one broad, low-energy Gaussian halo in linear-light byte space
-before the existing background blend.
+Keeps the sharp HUD core and adds one broad, low-energy Gaussian halo in
+linear-light byte space before the blend. Does not touch Raven's PSF.
 
-The halos are computed at reduced resolution and scaled back up. That is not a
-shortcut taken to save effort -- a wide halo is low-frequency by construction,
-so there is nothing in it that a full-resolution blur could represent and a
-quarter-resolution one could not. It matters because the simulator only ever
-displays the newest blended frame: anything slower than the queue is discarded
-before it reaches the screen, so a halo that is beautiful and late is a halo
-nobody sees.
+Computed at reduced resolution and scaled back up: a wide halo is
+low-frequency, so this costs a fraction of a full-resolution blur for the
+same result -- the simulator discards any frame slower than the queue.
 
-Each blurred layer is then scaled so its own peak is `strength` of the source
-peak. A Gaussian blur preserves energy, so blurring a two-pixel line spreads it
-until the result is about three percent of the line's brightness -- and this
-whole interface is two-pixel lines. Without renormalising, a "Glow" control at
-its maximum produced roughly 3.7% beside an edge where the reference look has
-33%: an order of magnitude short, with no setting able to close it.
-
-With it, the control means what its name says. Glow 20% puts a glow beside a
-bright edge that is 20% as bright as the edge, whether that edge is a card
-outline, a letter or a dot.
-
-The trade this makes: the halo is scaled against the brightest thing in the
-frame, so one very bright element sets the reference for everything else. In a
-HUD drawn at one brightness that is what you want. It would not suit a
-photograph.
+The blurred layer is rescaled so its own peak is `strength` of the source
+peak, not the energy the blur spread out (a Gaussian blur preserves energy,
+so a thin line blurred wide returns much dimmer). Scaled against the frame's
+brightest pixel, matching a HUD drawn at one brightness.
 """
 
 from __future__ import annotations
@@ -34,8 +18,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-# Blur at 1/DOWNSCALE resolution. Four keeps a 54px halo smooth to the eye
-# while doing about a sixteenth of the work.
+# Blur at 1/DOWNSCALE resolution -- see module docstring.
 DOWNSCALE = 4
 
 # Below this radius the downscale-and-blur round trip costs more than it
@@ -44,12 +27,7 @@ MIN_RADIUS_FOR_DOWNSCALE = 8
 
 
 def _blur(linear_u8: np.ndarray, radius: int) -> np.ndarray:
-    """A broad Gaussian, computed where it is cheap to compute.
-
-    Blur in float rather than bytes, or faint wide-halo energy quantises
-    to zero before it can be summed. sigmaX is given rather than a kernel
-    size so the control maps straight to a spread radius.
-    """
+    """A broad Gaussian, blurred in float so faint energy doesn't quantise to zero."""
     if radius < MIN_RADIUS_FOR_DOWNSCALE:
         return cv2.GaussianBlur(
             linear_u8.astype(np.float32),
@@ -85,11 +63,10 @@ def apply_waveguide_halo(
     radius: int,
     strength: float,
 ) -> np.ndarray:
-    """Return sharp HUD + one broad additive halo, preserving uint8 shape/dtype.
+    """Sharp HUD + one additive halo, uint8 in/out.
 
-    ``radius``/``strength`` are the fixed HALO_RADIUS/HALO_STRENGTH from
-    config.json — this call is only reached when CONSIDER_WAVEGUIDE_HALO is
-    on, so there is nothing here to validate on the hot path.
+    radius/strength are the fixed config.json values; only called when
+    CONSIDER_WAVEGUIDE_HALO is on.
     """
     if strength == 0.0:
         return hud_linear_u8
@@ -103,9 +80,7 @@ def apply_waveguide_halo(
     if layer_peak <= 0.0:
         return hud_linear_u8
 
-    # Scale so the halo's own peak is `strength` of the source's, not
-    # `strength` of the energy the blur spread out. See the module
-    # docstring: without this the control cannot reach the look.
+    # Peak-normalise -- see module docstring.
     out = (
         hud_linear_u8.astype(np.float32) + layer * (source_peak / layer_peak) * strength
     )
